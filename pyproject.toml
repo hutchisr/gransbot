@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "gransbot"
+version = "0.1.0"
+description = ""
+authors = []
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+revChatGPT = "^0.0.31"
+websockets = "^10.4"
+requests = "^2.28.1"
+tomlkit = "^0.11.6"
+aiohttp = "^3.8.3"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.mypy]
+ignore_missing_imports = true
+# follow_imports = "silent"
+install_types = true
+non_interactive = true
+# plugins = "marshmallow_dataclass.mypy"
