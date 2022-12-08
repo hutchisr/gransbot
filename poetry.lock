@@ -1,6 +1,6 @@
 [[package]]
 name = "certifi"
-version = "2022.9.24"
+version = "2022.12.7"
 description = "Python package for providing Mozilla's CA Bundle."
 category = "main"
 optional = false
@@ -26,6 +26,17 @@ optional = false
 python-versions = ">=3.5"
 
 [[package]]
+name = "openaiauth"
+version = "0.0.3.1"
+description = "OpenAI Authentication Reverse Engineered"
+category = "main"
+optional = false
+python-versions = "*"
+
+[package.dependencies]
+tls-client = "*"
+
+[[package]]
 name = "requests"
 version = "2.28.1"
 description = "Python HTTP for Humans."
@@ -45,15 +56,15 @@ use-chardet-on-py3 = ["chardet (>=3.0.2,<6)"]
 
 [[package]]
 name = "revchatgpt"
-version = "0.0.31.1"
+version = "0.0.31.5"
 description = "ChatGPT is a reverse engineering of OpenAI's ChatGPT API"
 category = "main"
 optional = false
 python-versions = "*"
 
 [package.dependencies]
+OpenAIAuth = "*"
 requests = "*"
-tls-client = "*"
 
 [[package]]
 name = "tls-client"
@@ -99,8 +110,8 @@ content-hash = "2e05d0c1ebcfde35e939dde7f38aa9bbdec94fc27e5790812804ea99873224a9
 
 [metadata.files]
 certifi = [
-    {file = "certifi-2022.9.24-py3-none-any.whl", hash = "sha256:90c1a32f1d68f940488354e36370f6cca89f0f106db09518524c88d6ed83f382"},
-    {file = "certifi-2022.9.24.tar.gz", hash = "sha256:0d9c601124e5a6ba9712dbc60d9c53c21e34f5f641fe83002317394311bdce14"},
+    {file = "certifi-2022.12.7-py3-none-any.whl", hash = "sha256:4ad3232f5e926d6718ec31cfc1fcadfde020920e278684144551c91769c7bc18"},
+    {file = "certifi-2022.12.7.tar.gz", hash = "sha256:35824b4c3a97115964b408844d64aa14db1cc518f6562e8d7261699d1350a9e3"},
 ]
 charset-normalizer = [
     {file = "charset-normalizer-2.1.1.tar.gz", hash = "sha256:5a3d016c7c547f69d6f81fb0db9449ce888b418b5b9952cc5e6e66843e9dd845"},
@@ -110,13 +121,17 @@ idna = [
     {file = "idna-3.4-py3-none-any.whl", hash = "sha256:90b77e79eaa3eba6de819a0c442c0b4ceefc341a7a2ab77d7562bf49f425c5c2"},
     {file = "idna-3.4.tar.gz", hash = "sha256:814f528e8dead7d329833b91c5faa87d60bf71824cd12a7530b5526063d02cb4"},
 ]
+openaiauth = [
+    {file = "OpenAIAuth-0.0.3.1-py3-none-any.whl", hash = "sha256:49eaff0e4a7884a9735e6d280f3e743522516ef66a86e015c2b0769c9921722f"},
+    {file = "OpenAIAuth-0.0.3.1.tar.gz", hash = "sha256:4e89c8d6657f14589e8bcf97f399ef69c1ed9a951b20f72e90aba3ff3bd64cb0"},
+]
 requests = [
     {file = "requests-2.28.1-py3-none-any.whl", hash = "sha256:8fefa2a1a1365bf5520aac41836fbee479da67864514bdb821f31ce07ce65349"},
     {file = "requests-2.28.1.tar.gz", hash = "sha256:7c5599b102feddaa661c826c56ab4fee28bfd17f5abca1ebbe3e7f19d7c97983"},
 ]
 revchatgpt = [
-    {file = "revChatGPT-0.0.31.1-py3-none-any.whl", hash = "sha256:3d4731d49ce08ca17234e47df34102e798392c741e9545a83c10294dd9b3acff"},
-    {file = "revChatGPT-0.0.31.1.tar.gz", hash = "sha256:ffae8902904653702788a2e13bc689a14370020666a8b682cc94d17dafbcba39"},
+    {file = "revChatGPT-0.0.31.5-py3-none-any.whl", hash = "sha256:a6f454db5c1c192bc3479b3f44fec4e9c8bee3fdf750c8a9b13531970d9a39c4"},
+    {file = "revChatGPT-0.0.31.5.tar.gz", hash = "sha256:cdce9f63c7343411f96424abfe85bea4d94c65627f27dc7d04b5eff599032e7f"},
 ]
 tls-client = [
     {file = "tls_client-0.1.5-py3-none-any.whl", hash = "sha256:cd65d7b1405cd2075050fca4e59abc6e04207b29ea47eabc6f406ce16735421f"},

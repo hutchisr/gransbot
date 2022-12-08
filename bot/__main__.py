@@ -164,11 +164,19 @@ async def reply(config, status):
         return
     bot = bot_cache.get(conversation_id)
     if not bot:
-        bot = Chatbot(config["chat_gpt"], conversation_id=conversation_id)
+        bot = Chatbot(config["chat_gpt"], conversation_id=conversation_id, debug=True)
         bot_cache.update({bot.conversation_id: bot})
+    fail_count = 0
     while True:
         try:
             message = bot.get_chat_response(config["phrase"].format(content))["message"]
+            if "OpenAI" in message:
+                fail_count += 1
+                await asyncio.sleep(15)
+                if fail_count <= 5:
+                    continue
+                else:
+                    return
         except ValueError as err:
             logging.error("%s. Sleeping 30 sec...", err)
             await asyncio.sleep(60)
