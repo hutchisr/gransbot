@@ -7,6 +7,7 @@ import re
 import html
 import hashlib
 import signal
+import sys
 from typing import Dict, List
 
 import tomlkit
@@ -15,6 +16,7 @@ from requests import HTTPError
 import websockets
 import websockets.client
 from revChatGPT.revChatGPT import Chatbot
+import termios
 
 
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +30,19 @@ SCOPES = ["read", "write", "follow", "push", "admin"]
 
 conversations: Dict[str, str] = {}
 bot_cache: Dict[str, Chatbot] = {}
+
+def long_input(prompt=""):
+    """Get around 4095 character limit in prompt"""
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    new = termios.tcgetattr(fd)
+    new[3] = new[3] & ~termios.ICANON
+    try:
+        termios.tcsetattr(fd, termios.TCSADRAIN, new)
+        line = input(prompt)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    return line
 
 
 def strip_html(string):
@@ -55,9 +70,9 @@ def setup():
         tomlkit.dump(
             {
                 "domain": input("domain: "),
-                # "keywords": input("keywords (space separated): ".split(" ")),
-                # "authors": input("authors (space separated): ".split(" ")),
-                # "phrase": input("Optional activation phrase with `{}` to denote conversation input: "),
+                "keywords": input("keywords space separated): ").split(" "),
+                "authors": input("authors (space separated): ").split(" "),
+                "phrase": input("Optional activation phrase with `{}` to denote conversation input: "),
             },
             open(CONFIG_PATH, "w"),
         )
@@ -109,10 +124,12 @@ def setup():
 
     if not config.get("chat_gpt", {}).get("session_token"):
         print(
-            "Fedi auth is set up but you will need to configure ChatGPT auth manually: https://github.com/acheong08/ChatGPT/wiki"
+            "Fedi auth is set up but you will need to configure ChatGPT auth manually: https://github.com/acheong08/ChatGPT/wiki\n"
         )
-        session_token = input("session_token: ")
+        session_token = long_input("session token: ")
+        config["chat_gtp"] = {}
         config["chat_gtp"]["session_token"] = session_token
+        tomlkit.dump(config, open(CONFIG_PATH, "w"))
 
     return config
 
