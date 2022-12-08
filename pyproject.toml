@@ -2,7 +2,8 @@
 name = "bot"
 version = "0.1.0"
 description = ""
-authors = ["Anemoneya <anemoneya@icloud.com>"]
+authors = ["Anemoneya <42283663+hutchisr@users.noreply.github.com>"]
+license = "MIT"
 
 [tool.poetry.dependencies]
 python = "^3.9"

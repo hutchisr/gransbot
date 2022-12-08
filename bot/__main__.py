@@ -122,13 +122,14 @@ def setup():
         config["cookies"] = dict(response.cookies)
         tomlkit.dump(config, open(CONFIG_PATH, "w"))
 
-    if not config.get("chat_gpt", {}).get("session_token"):
+    session_token = config.get("chat_gpt", {}).get("session_token")
+    if not session_token:
         print(
             "Fedi auth is set up but you will need to configure ChatGPT auth manually: https://github.com/acheong08/ChatGPT/wiki\n"
         )
         session_token = long_input("session token: ")
-        config["chat_gtp"] = {}
-        config["chat_gtp"]["session_token"] = session_token
+        config["chat_gpt"] = {}
+        config["chat_gpt"]["session_token"] = session_token
         tomlkit.dump(config, open(CONFIG_PATH, "w"))
 
     return config
@@ -200,7 +201,8 @@ async def main():
 
 
 def handle_sigint(signal, frame):
-    json.dump(conversations, open(CONVO_BACKUP, "w"))
+    if conversations:
+        json.dump(conversations, open(CONVO_BACKUP, "w"))
     print("Quitting!")
     exit(0)
 
