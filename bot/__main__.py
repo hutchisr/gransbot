@@ -173,7 +173,11 @@ async def reply(config, status):
             logging.error("%s. Sleeping 30 sec...", err)
             await asyncio.sleep(60)
             continue
+        except:
+            logging.exception("????")
+            return
         break
+
     print(message)
     response = requests.post(
         f"https://{config['domain']}/api/v1/statuses",
