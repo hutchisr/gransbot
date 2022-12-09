@@ -67,8 +67,10 @@ def mentions_string(status, config):
             s += f"@{mention['acct']} "
     return s
 
+
 class Bot:
     """Chat Bot"""
+
     def __init__(self):
         if not CONFIG_PATH.is_file():
             tomlkit.dump(
@@ -76,7 +78,9 @@ class Bot:
                     "domain": input("domain: "),
                     "keywords": input("keywords space separated): ").split(" "),
                     "authors": input("authors (space separated): ").split(" "),
-                    "phrase": input("Optional activation phrase with `{}` to denote conversation input: "),
+                    "phrase": input(
+                        "Optional activation phrase with `{}` to denote conversation input: "
+                    ),
                 },
                 open(CONFIG_PATH, "w"),
             )
@@ -95,8 +99,10 @@ class Bot:
             response.raise_for_status()
             data = response.json()
             logging.info("Client response: %r", data)
+
             self.config["client_id"] = data["client_id"]
             self.config["client_secret"] = data["client_secret"]
+
             tomlkit.dump(self.config, open(CONFIG_PATH, "w"))
 
         if not self.config.get("access_token") or not self.config.get("username"):
@@ -120,7 +126,9 @@ class Bot:
             self.config["username"] = username
             self.config["access_token"] = data["access_token"]
             self.config["refresh_token"] = data["refresh_token"]
-            self.config["token_expires"] = datetime.datetime.utcnow() + datetime.timedelta(
+            self.config[
+                "token_expires"
+            ] = datetime.datetime.utcnow() + datetime.timedelta(
                 seconds=data["expires_in"]
             )
             self.config["cookies"] = dict(response.cookies)
@@ -136,6 +144,7 @@ class Bot:
             self.config["chat_gpt"]["session_token"] = session_token
             tomlkit.dump(self.config, open(CONFIG_PATH, "w"))
 
+        self.status_queue = asyncio.Queue(self.config.get("queue_size", 100))
         self.bot = Chatbot(self.config["chat_gpt"])
         if CONVO_BACKUP.is_file():
             self.conversations = json.load(open(CONVO_BACKUP))
@@ -145,44 +154,70 @@ class Bot:
             logging.info("Old conversations log, migrating")
             self.conversations = list(self.conversations.keys())
 
-
-    async def listener(self):
+    async def listen(self):
         uri = f"wss://token:{self.config['access_token']}@{self.config['domain']}/api/v1/streaming/?access_token={self.config['access_token']}&stream=user"
         async with websockets.client.connect(
             uri,
         ) as websocket:
+            logging.info("Connected to websocket, waiting for statuses.")
             while True:
                 message = json.loads(await websocket.recv())
                 status = json.loads(message["payload"])
-                if message["event"] == "update":
-                    # print(message["payload"])
-                    for mention in status.get("mentions", []):
-                        if mention["acct"] == self.config["username"]:
-                            await self.reply(status)
-                elif message["event"] == "notification":
-                    await self.reply_notification(status)
+                try:
+                    self.status_queue.put_nowait(
+                        {"event": message["event"], "status": status}
+                    )
+                except asyncio.QueueFull:
+                    logging.error(
+                        "Queue full, dropping status from %s", status["account"]["acct"]
+                    )
 
+    async def read_status(self):
+        logging.info("Waiting for statuses to be loaded...")
+        while True:
+            message = await self.status_queue.get()
+            event = message.get("event")
+            status = message.get("status")
+            try:
+                if (
+                    event == "update"
+                    and self.config["username"]
+                    in [m["acct"] for m in status.get("mentions", [])]
+                    and (
+                        status.get("in_reply_to_id") in self.conversations
+                        or any(
+                            k in status["content"]
+                            for k in self.config.get("keywords", [])
+                        )
+                        or status["account"]["acct"] in self.config.get("authors", [])
+                        or urlparse(status["account"]["url"]).netloc
+                        in self.config.get("domains", [])
+                    )
+                ):
+                    await self.reply(status)
+                elif (
+                    event == "notification"
+                    and status.get("emoji")
+                    and (
+                        status["account"]["acct"] in self.config.get("authors", [])
+                        or urlparse(status["account"]["url"]).netloc
+                        in self.config.get("domains", [])
+                    )
+                ):
+                    await self.reply_notification(status)
+                else:
+                    continue
+                logging.info("Finished replying, wait 10 seconds...")
+                await asyncio.sleep(10)
+            except Exception:
+                logging.exception("Something went wrong while replying")
+                await asyncio.sleep(1)
 
     async def reply(self, status):
         content = strip_name(strip_html(status["content"]), self.config)
-        if not (
-            status.get("in_reply_to_id") in self.conversations
-            or any(k in content for k in self.config.get("keywords", []))
-            or status["account"]["acct"] in self.config.get("authors", [])
-            or urlparse(status["account"]["url"]).netloc in self.config.get("domains", [])
-        ):
-            logging.info(
-                f"Not existing conversation and no mention of keywords or configured authors, ignored message from {status['account']['acct']}"
-            )
-            return
-        while True:
-            try:
-                message = (await self.bot.get_chat_response(self.config["phrase"].format(content)))["message"]
-            except Exception:
-                logging.exception("Sleeping 60 sec due to error.")
-                await asyncio.sleep(60)
-                continue
-            break
+        message = (
+            await self.bot.get_chat_response(self.config["phrase"].format(content))
+        )["message"]
         print(message)
         response = requests.post(
             f"https://{self.config['domain']}/api/v1/statuses",
@@ -196,29 +231,18 @@ class Bot:
                 "in_reply_to_account_id": status["account"]["id"],
             },
         )
+        response.raise_for_status()
         data = response.json()
         self.conversations.append(data["id"])
 
     async def reply_notification(self, status):
-        if "emoji" not in status:
-            return
-        if not (
-            status["account"]["acct"] in self.config.get("authors", [])
-            or urlparse(status["account"]["url"]).netloc in self.config.get("domains", [])
-        ):
-            logging.info(
-                f"Not a configured author, ignored reaction from {status['account']['acct']}"
+        message = (
+            await self.bot.get_chat_response(
+                self.config["phrase"].format(status.get("emoji", "👍"))
             )
-            return
-        while True:
-            try:
-                message = (await self.bot.get_chat_response(self.config["phrase"].format(status.get('emoji', '👍'))))["message"]
-            except Exception:
-                logging.exception("Encountered error in notification response")
-                return
-            break
+        )["message"]
         print(message)
-        _response = requests.post(
+        response = requests.post(
             f"https://{self.config['domain']}/api/v1/statuses",
             headers={
                 "Authorization": f"Bearer {self.config['access_token']}",
@@ -230,22 +254,25 @@ class Bot:
                 "visibility": "direct",
             },
         )
+        response.raise_for_status()
 
 
 async def main():
     global bot
     bot = Bot()
-    print("Waiting for statuses...")
     while True:
         try:
-            await bot.listener()
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(bot.listen())
+                tg.create_task(bot.read_status())
         except Exception:
-            logging.exception("Something went wrong while listening to stream. Will try to reconnect in 60 seconds.")
+            logging.exception(
+                "Something went wrong while listening to stream. Will try to reconnect in 60 seconds."
+            )
             asyncio.sleep(60)
 
 
 def handle_sigint(signal, frame):
-    global bot
     if bot:
         session_token = bot.bot.config.get("session_token")
         if session_token:

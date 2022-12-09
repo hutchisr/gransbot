@@ -16,6 +16,9 @@ tomlkit = "^0.11.6"
 bot = "bot.__main__:main"
 
 
+[tool.poetry.group.dev.dependencies]
+black = "^22.12.0"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
