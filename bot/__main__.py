@@ -28,9 +28,6 @@ CONVO_BACKUP = Path("conversations.json")
 REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
 SCOPES = ["read", "write", "follow", "push", "admin"]
 
-conversations: Dict[str, str] = {}
-bot_cache: Dict[str, Chatbot] = {}
-
 bot: Union["Bot", None] = None
 
 
@@ -267,9 +264,9 @@ async def main():
                 tg.create_task(bot.read_status())
         except Exception:
             logging.exception(
-                "Something went wrong while listening to stream. Will try to reconnect in 60 seconds."
+                "Something went wrong while listening to stream. Will try to reconnect in 10 seconds."
             )
-            asyncio.sleep(60)
+            await asyncio.sleep(10)
 
 
 def handle_sigint(signal, frame):
