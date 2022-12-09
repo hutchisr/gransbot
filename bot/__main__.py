@@ -1,23 +1,23 @@
-import json
-from pathlib import Path
-import logging
-import datetime
 import asyncio
-import re
-import html
+import datetime
 import hashlib
+import html
+import json
+import logging
+import re
 import signal
 import sys
-from typing import Dict, List
+import termios
+from pathlib import Path
+from typing import Dict, List, Union
+from urllib.parse import urlparse
 
-import tomlkit
 import requests
-from requests import HTTPError
+import tomlkit
 import websockets
 import websockets.client
-from revChatGPT.revChatGPT import Chatbot
-import termios
-
+from requests import HTTPError
+from asyncChatGPT.asyncChatGPT import Chatbot
 
 logging.basicConfig(level=logging.INFO)
 
@@ -30,6 +30,9 @@ SCOPES = ["read", "write", "follow", "push", "admin"]
 
 conversations: Dict[str, str] = {}
 bot_cache: Dict[str, Chatbot] = {}
+
+bot: Union["Bot", None] = None
+
 
 def long_input(prompt=""):
     """Get around 4095 character limit in prompt"""
@@ -64,157 +67,192 @@ def mentions_string(status, config):
             s += f"@{mention['acct']} "
     return s
 
+class Bot:
+    """Chat Bot"""
+    def __init__(self):
+        if not CONFIG_PATH.is_file():
+            tomlkit.dump(
+                {
+                    "domain": input("domain: "),
+                    "keywords": input("keywords space separated): ").split(" "),
+                    "authors": input("authors (space separated): ").split(" "),
+                    "phrase": input("Optional activation phrase with `{}` to denote conversation input: "),
+                },
+                open(CONFIG_PATH, "w"),
+            )
 
-def setup():
-    if not CONFIG_PATH.is_file():
-        tomlkit.dump(
-            {
-                "domain": input("domain: "),
-                "keywords": input("keywords space separated): ").split(" "),
-                "authors": input("authors (space separated): ").split(" "),
-                "phrase": input("Optional activation phrase with `{}` to denote conversation input: "),
-            },
-            open(CONFIG_PATH, "w"),
-        )
+        self.config = tomlkit.load(open(CONFIG_PATH))
 
-    config = tomlkit.load(open(CONFIG_PATH))
+        if not self.config.get("client_id") or not self.config.get("client_secret"):
+            response = requests.post(
+                f"https://{self.config['domain']}/api/v1/apps",
+                data={
+                    "client_name": "gransbot",
+                    "scopes": " ".join(SCOPES),
+                    "redirect_uris": REDIRECT_URI,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            logging.info("Client response: %r", data)
+            self.config["client_id"] = data["client_id"]
+            self.config["client_secret"] = data["client_secret"]
+            tomlkit.dump(self.config, open(CONFIG_PATH, "w"))
 
-    if not config.get("client_id") or not config.get("client_secret"):
-        response = requests.post(
-            f"https://{config['domain']}/api/v1/apps",
-            data={
-                "client_name": "gransbot",
-                "scopes": " ".join(SCOPES),
-                "redirect_uris": REDIRECT_URI,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        logging.info("Client response: %r", data)
-        config["client_id"] = data["client_id"]
-        config["client_secret"] = data["client_secret"]
-        tomlkit.dump(config, open(CONFIG_PATH, "w"))
+        if not self.config.get("access_token") or not self.config.get("username"):
+            username = input("username: ")
+            password = input("password: ")
+            response = requests.post(
+                f"https://{self.config['domain']}/oauth/token",
+                data={
+                    "username": username,
+                    "password": password,
+                    "client_id": self.config["client_id"],
+                    "client_secret": self.config["client_secret"],
+                    "grant_type": "password",
+                    "scopes": " ".join(SCOPES),
+                    "redirect_uris": REDIRECT_URI,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            logging.info("Token response: %r", data)
+            self.config["username"] = username
+            self.config["access_token"] = data["access_token"]
+            self.config["refresh_token"] = data["refresh_token"]
+            self.config["token_expires"] = datetime.datetime.utcnow() + datetime.timedelta(
+                seconds=data["expires_in"]
+            )
+            self.config["cookies"] = dict(response.cookies)
+            tomlkit.dump(self.config, open(CONFIG_PATH, "w"))
 
-    if not config.get("access_token") or not config.get("username"):
-        username = input("username: ")
-        password = input("password: ")
-        response = requests.post(
-            f"https://{config['domain']}/oauth/token",
-            data={
-                "username": username,
-                "password": password,
-                "client_id": config["client_id"],
-                "client_secret": config["client_secret"],
-                "grant_type": "password",
-                "scopes": " ".join(SCOPES),
-                "redirect_uris": REDIRECT_URI,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        logging.info("Token response: %r", data)
-        config["username"] = username
-        config["access_token"] = data["access_token"]
-        config["refresh_token"] = data["refresh_token"]
-        config["token_expires"] = datetime.datetime.utcnow() + datetime.timedelta(
-            seconds=data["expires_in"]
-        )
-        config["cookies"] = dict(response.cookies)
-        tomlkit.dump(config, open(CONFIG_PATH, "w"))
+        session_token = self.config.get("chat_gpt", {}).get("session_token")
+        if not session_token:
+            print(
+                "Fedi auth is set up but you will need to configure ChatGPT auth manually: https://github.com/acheong08/ChatGPT/wiki\n"
+            )
+            session_token = long_input("session token: ")
+            self.config["chat_gpt"] = {}
+            self.config["chat_gpt"]["session_token"] = session_token
+            tomlkit.dump(self.config, open(CONFIG_PATH, "w"))
 
-    session_token = config.get("chat_gpt", {}).get("session_token")
-    if not session_token:
-        print(
-            "Fedi auth is set up but you will need to configure ChatGPT auth manually: https://github.com/acheong08/ChatGPT/wiki\n"
-        )
-        session_token = long_input("session token: ")
-        config["chat_gpt"] = {}
-        config["chat_gpt"]["session_token"] = session_token
-        tomlkit.dump(config, open(CONFIG_PATH, "w"))
-
-    return config
+        self.bot = Chatbot(self.config["chat_gpt"])
+        if CONVO_BACKUP.is_file():
+            self.conversations = json.load(open(CONVO_BACKUP))
+        else:
+            self.conversations = []
+        if isinstance(self.conversations, dict):
+            logging.info("Old conversations log, migrating")
+            self.conversations = list(self.conversations.keys())
 
 
-async def listener(config):
-    uri = f"wss://token:{config['access_token']}@{config['domain']}/api/v1/streaming/?access_token={config['access_token']}&stream=user"
-    async with websockets.client.connect(
-        uri,
-    ) as websocket:
-        while True:
-            message = json.loads(await websocket.recv())
-            if message["event"] == "update":
+    async def listener(self):
+        uri = f"wss://token:{self.config['access_token']}@{self.config['domain']}/api/v1/streaming/?access_token={self.config['access_token']}&stream=user"
+        async with websockets.client.connect(
+            uri,
+        ) as websocket:
+            while True:
+                message = json.loads(await websocket.recv())
                 status = json.loads(message["payload"])
-                # print(message["payload"])
-                for mention in status.get("mentions", []):
-                    if mention["acct"] == config["username"]:
-                        await reply(config, status)
+                if message["event"] == "update":
+                    # print(message["payload"])
+                    for mention in status.get("mentions", []):
+                        if mention["acct"] == self.config["username"]:
+                            await self.reply(status)
+                elif message["event"] == "notification":
+                    await self.reply_notification(status)
 
 
-async def reply(config, status):
-    content = strip_name(strip_html(status["content"]), config)
-    conversation_id = conversations.get(status.get("in_reply_to_id"))
-    if (
-        not conversation_id
-        and not any(k in content for k in config["keywords"])
-        and status["account"]["acct"] not in config["authors"]
-    ):
-        logging.info(
-            f"Not existing conversation and no mention of keywords or configured authors, ignored message from {status['account']['acct']}"
-        )
-        return
-    bot = bot_cache.get(conversation_id)
-    if not bot:
-        bot = Chatbot(config["chat_gpt"], conversation_id=conversation_id, debug=True)
-        bot_cache.update({bot.conversation_id: bot})
-    fail_count = 0
-    while True:
-        try:
-            message = bot.get_chat_response(config["phrase"].format(content))["message"]
-            if "OpenAI" in message:
-                fail_count += 1
-                await asyncio.sleep(15)
-                if fail_count <= 5:
-                    continue
-                else:
-                    return
-        except ValueError as err:
-            logging.error("%s. Sleeping 30 sec...", err)
-            await asyncio.sleep(60)
-            continue
-        except:
-            logging.exception("????")
+    async def reply(self, status):
+        content = strip_name(strip_html(status["content"]), self.config)
+        if not (
+            status.get("in_reply_to_id") in self.conversations
+            or any(k in content for k in self.config.get("keywords", []))
+            or status["account"]["acct"] in self.config.get("authors", [])
+            or urlparse(status["account"]["url"]).netloc in self.config.get("domains", [])
+        ):
+            logging.info(
+                f"Not existing conversation and no mention of keywords or configured authors, ignored message from {status['account']['acct']}"
+            )
             return
-        break
+        while True:
+            try:
+                message = (await self.bot.get_chat_response(self.config["phrase"].format(content)))["message"]
+            except Exception:
+                logging.exception("Sleeping 60 sec due to error.")
+                await asyncio.sleep(60)
+                continue
+            break
+        print(message)
+        response = requests.post(
+            f"https://{self.config['domain']}/api/v1/statuses",
+            headers={
+                "Authorization": f"Bearer {self.config['access_token']}",
+                "Idempotency-Key": f"{hashlib.sha1(message.encode())}",
+            },
+            data={
+                "status": mentions_string(status, self.config) + message.strip('"'),
+                "in_reply_to_id": status["id"],
+                "in_reply_to_account_id": status["account"]["id"],
+            },
+        )
+        data = response.json()
+        self.conversations.append(data["id"])
 
-    print(message)
-    response = requests.post(
-        f"https://{config['domain']}/api/v1/statuses",
-        headers={
-            "Authorization": f"Bearer {config['access_token']}",
-            "Idempotency-Key": f"{hashlib.sha1(message.encode())}",
-        },
-        data={
-            "status": mentions_string(status, config) + message.strip('"'),
-            "in_reply_to_id": status["id"],
-            "in_reply_to_account_id": status["account"]["id"],
-        },
-    )
-    data = response.json()
-    conversations[data["id"]] = bot.conversation_id
+    async def reply_notification(self, status):
+        if "emoji" not in status:
+            return
+        if not (
+            status["account"]["acct"] in self.config.get("authors", [])
+            or urlparse(status["account"]["url"]).netloc in self.config.get("domains", [])
+        ):
+            logging.info(
+                f"Not a configured author, ignored reaction from {status['account']['acct']}"
+            )
+            return
+        while True:
+            try:
+                message = (await self.bot.get_chat_response(self.config["phrase"].format(status.get('emoji', '👍'))))["message"]
+            except Exception:
+                logging.exception("Encountered error in notification response")
+                return
+            break
+        print(message)
+        _response = requests.post(
+            f"https://{self.config['domain']}/api/v1/statuses",
+            headers={
+                "Authorization": f"Bearer {self.config['access_token']}",
+                "Idempotency-Key": f"{hashlib.sha1(message.encode())}",
+            },
+            data={
+                "status": f"@{status['account']['acct']} " + message.strip('"'),
+                "in_reply_to_account_id": status["account"]["id"],
+                "visibility": "direct",
+            },
+        )
 
 
 async def main():
-    config = setup()
-    if CONVO_BACKUP.is_file():
-        convos = json.load(open(CONVO_BACKUP))
-        conversations.update(convos)
+    global bot
+    bot = Bot()
     print("Waiting for statuses...")
-    await listener(config)
+    while True:
+        try:
+            await bot.listener()
+        except Exception:
+            logging.exception("Something went wrong while listening to stream. Will try to reconnect in 60 seconds.")
+            asyncio.sleep(60)
 
 
 def handle_sigint(signal, frame):
-    if conversations:
-        json.dump(conversations, open(CONVO_BACKUP, "w"))
+    global bot
+    if bot:
+        session_token = bot.bot.config.get("session_token")
+        if session_token:
+            bot.config["chat_gpt"]["session_token"] = session_token
+            tomlkit.dump(bot.config, open(CONFIG_PATH, "w"))
+        if bot.conversations:
+            json.dump(bot.conversations, open(CONVO_BACKUP, "w"))
     print("Quitting!")
     exit(0)
 
