@@ -11,6 +11,7 @@ websockets = "^10.4"
 requests = "^2.28.1"
 tomlkit = "^0.11.6"
 openai = "^0.27.2"
+tiktoken = "^0.3.2"
 
 [tool.poetry.scripts]
 bot = "bot.__main__:main"

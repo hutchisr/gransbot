@@ -18,6 +18,7 @@ import websockets
 import websockets.client
 from requests import HTTPError
 import openai
+import tiktoken
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,6 +30,8 @@ REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
 SCOPES = ["read", "write", "follow", "push", "admin"]
 
 MODEL = "gpt-3.5-turbo"
+
+MAX_LEN = 1024
 
 
 def long_input(prompt=""):
@@ -63,6 +66,31 @@ def mentions_string(status, config):
         if mention["acct"] != config["username"]:
             s += f"@{mention['acct']} "
     return s
+
+
+def num_tokens_from_messages(messages, model="gpt-3.5-turbo-0301"):
+    """Returns the number of tokens used by a list of messages."""
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+    except KeyError:
+        encoding = tiktoken.get_encoding("cl100k_base")
+    if model == "gpt-3.5-turbo-0301":  # note: future models may deviate from this
+        num_tokens = 0
+        for message in messages:
+            num_tokens += (
+                4  # every message follows <im_start>{role/name}\n{content}<im_end>\n
+            )
+            for key, value in message.items():
+                num_tokens += len(encoding.encode(value))
+                if key == "name":  # if there's a name, the role is omitted
+                    num_tokens += -1  # role is always required and always 1 token
+        num_tokens += 2  # every reply is primed with <im_start>assistant
+        return num_tokens
+    else:
+        raise NotImplementedError(
+            f"""num_tokens_from_messages() is not presently implemented for model {model}.
+  See https://github.com/openai/openai-python/blob/main/chatml.md for information on how messages are converted to tokens."""
+        )
 
 
 class Bot:
@@ -137,9 +165,12 @@ class Bot:
 
         openai.api_key = self.config["openapi_key"]
 
+        if CONVO_BACKUP.is_file():
+            self.conversations = json.load(open(CONVO_BACKUP))
+        else:
+            self.conversations = {}
 
         self.status_queue = asyncio.Queue(self.config.get("queue_size", 100))
-
 
     async def listen(self):
         uri = f"wss://token:{self.config['access_token']}@{self.config['domain']}/api/v1/streaming/?access_token={self.config['access_token']}&stream=user"
@@ -165,13 +196,17 @@ class Bot:
             message = await self.status_queue.get()
             event = message.get("event")
             status = message.get("status")
+            if len(status) > MAX_LEN:
+                logging.warning("Status message too long, ignoring")
+                continue
             try:
                 if (
                     event == "update"
                     and self.config["username"]
                     in [m["acct"] for m in status.get("mentions", [])]
                     and (
-                        any(
+                        status.get("in_reply_to_id") in self.conversations
+                        or any(
                             k in status["content"]
                             for k in self.config.get("keywords", [])
                         )
@@ -200,17 +235,22 @@ class Bot:
                 await asyncio.sleep(1)
 
     async def reply(self, status):
-        message = "average poast user"
         content = strip_name(strip_html(status["content"]), self.config)
+        messages = [
+            {
+                "role": "system",
+                "content": self.config.get(
+                    "assistant",
+                    "You are a helpful assistant.",
+                ),
+            }
+        ]
+        if status.get("in_reply_to_id") in self.conversations:
+            messages.append({"role": "assistant", "content": self.conversations[status["in_reply_to_id"]]})
+        messages.append({"role": "user", "content": content})
         try:
-            r = openai.ChatCompletion.create(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": self.config.get("assistant", "You are a helpful assistant. Do not mention that you are an AI.")},
-                    {"role": "user", "content": content}
-                ]
-            )
-            message: str = r["choices"][0]["message"]["content"] # type: ignore
+            r = openai.ChatCompletion.create(model=MODEL, messages=messages)
+            message: str = r["choices"][0]["message"]["content"]  # type: ignore
         except openai.InvalidRequestError:
             logging.exception("Invalid request error")
             return
@@ -227,7 +267,8 @@ class Bot:
             },
         )
         response.raise_for_status()
-        _data = response.json()
+        data = response.json()
+        self.conversations[data["id"]] = message
 
     # async def reply_notification(self, status):
     #     message = "average poast user"
@@ -262,6 +303,8 @@ async def main():
 
 
 def handle_sigint(signal, frame):
+    # if bot.conversations:
+    #     json.dump(bot.conversations, open(CONVO_BACKUP, "w"))
     print("Quitting!")
     exit(0)
 
