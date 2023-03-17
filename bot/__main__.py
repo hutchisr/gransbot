@@ -17,7 +17,7 @@ import tomlkit
 import websockets
 import websockets.client
 from requests import HTTPError
-from asyncChatGPT.asyncChatGPT import Chatbot
+import openai
 
 logging.basicConfig(level=logging.INFO)
 
@@ -28,7 +28,7 @@ CONVO_BACKUP = Path("conversations.json")
 REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
 SCOPES = ["read", "write", "follow", "push", "admin"]
 
-bot: Union["Bot", None] = None
+MODEL = "gpt-3.5-turbo"
 
 
 def long_input(prompt=""):
@@ -73,11 +73,12 @@ class Bot:
             tomlkit.dump(
                 {
                     "domain": input("domain: "),
-                    "keywords": input("keywords space separated): ").split(" "),
+                    "keywords": input("keywords (space separated): ").split(" "),
                     "authors": input("authors (space separated): ").split(" "),
-                    "phrase": input(
-                        "Optional activation phrase with `{}` to denote conversation input: "
-                    ),
+                    "domains": input("domains (space separated): ").split(" "),
+                    # "phrase": input(
+                    #     "Optional activation phrase with `{}` to denote conversation input: "
+                    # ),
                 },
                 open(CONFIG_PATH, "w"),
             )
@@ -131,25 +132,14 @@ class Bot:
             self.config["cookies"] = dict(response.cookies)
             tomlkit.dump(self.config, open(CONFIG_PATH, "w"))
 
-        session_token = self.config.get("chat_gpt", {}).get("session_token")
-        if not session_token:
-            print(
-                "Fedi auth is set up but you will need to configure ChatGPT auth manually: https://github.com/acheong08/ChatGPT/wiki\n"
-            )
-            session_token = long_input("session token: ")
-            self.config["chat_gpt"] = {}
-            self.config["chat_gpt"]["session_token"] = session_token
-            tomlkit.dump(self.config, open(CONFIG_PATH, "w"))
+        if not self.config.get("openapi_key"):
+            self.config["openapi_key"] = input("OpenAPI API key: ")
+
+        openai.api_key = self.config["openapi_key"]
+
 
         self.status_queue = asyncio.Queue(self.config.get("queue_size", 100))
-        self.bot = Chatbot(self.config["chat_gpt"])
-        if CONVO_BACKUP.is_file():
-            self.conversations = json.load(open(CONVO_BACKUP))
-        else:
-            self.conversations = []
-        if isinstance(self.conversations, dict):
-            logging.info("Old conversations log, migrating")
-            self.conversations = list(self.conversations.keys())
+
 
     async def listen(self):
         uri = f"wss://token:{self.config['access_token']}@{self.config['domain']}/api/v1/streaming/?access_token={self.config['access_token']}&stream=user"
@@ -181,8 +171,7 @@ class Bot:
                     and self.config["username"]
                     in [m["acct"] for m in status.get("mentions", [])]
                     and (
-                        status.get("in_reply_to_id") in self.conversations
-                        or any(
+                        any(
                             k in status["content"]
                             for k in self.config.get("keywords", [])
                         )
@@ -192,16 +181,16 @@ class Bot:
                     )
                 ):
                     await self.reply(status)
-                elif (
-                    event == "notification"
-                    and status.get("emoji")
-                    and (
-                        status["account"]["acct"] in self.config.get("authors", [])
-                        or urlparse(status["account"]["url"]).netloc
-                        in self.config.get("domains", [])
-                    )
-                ):
-                    await self.reply_notification(status)
+                # elif (
+                #     event == "notification"
+                #     and status.get("emoji")
+                #     and (
+                #         status["account"]["acct"] in self.config.get("authors", [])
+                #         or urlparse(status["account"]["url"]).netloc
+                #         in self.config.get("domains", [])
+                #     )
+                # ):
+                #     await self.reply_notification(status)
                 else:
                     continue
                 logging.info("Finished replying, wait 10 seconds...")
@@ -211,11 +200,20 @@ class Bot:
                 await asyncio.sleep(1)
 
     async def reply(self, status):
+        message = "average poast user"
         content = strip_name(strip_html(status["content"]), self.config)
-        message = (
-            await self.bot.get_chat_response(self.config["phrase"].format(content))
-        )["message"]
-        print(message)
+        try:
+            r = openai.ChatCompletion.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": self.config.get("asssistant", "You are a helpful assistant")},
+                    {"role": "user", "content": content}
+                ]
+            )
+            message: str = r["choices"][0]["message"]["content"] # type: ignore
+        except openai.InvalidRequestError:
+            logging.exception("Invalid request error")
+            return
         response = requests.post(
             f"https://{self.config['domain']}/api/v1/statuses",
             headers={
@@ -229,29 +227,23 @@ class Bot:
             },
         )
         response.raise_for_status()
-        data = response.json()
-        self.conversations.append(data["id"])
+        _data = response.json()
 
-    async def reply_notification(self, status):
-        message = (
-            await self.bot.get_chat_response(
-                self.config["phrase"].format(status.get("emoji", "👍"))
-            )
-        )["message"]
-        print(message)
-        response = requests.post(
-            f"https://{self.config['domain']}/api/v1/statuses",
-            headers={
-                "Authorization": f"Bearer {self.config['access_token']}",
-                "Idempotency-Key": f"{hashlib.sha1(message.encode())}",
-            },
-            data={
-                "status": f"@{status['account']['acct']} " + message.strip('"'),
-                "in_reply_to_account_id": status["account"]["id"],
-                "visibility": "direct",
-            },
-        )
-        response.raise_for_status()
+    # async def reply_notification(self, status):
+    #     message = "average poast user"
+    #     response = requests.post(
+    #         f"https://{self.config['domain']}/api/v1/statuses",
+    #         headers={
+    #             "Authorization": f"Bearer {self.config['access_token']}",
+    #             "Idempotency-Key": f"{hashlib.sha1(message.encode())}",
+    #         },
+    #         data={
+    #             "status": f"@{status['account']['acct']} " + message.strip('"'),
+    #             "in_reply_to_account_id": status["account"]["id"],
+    #             "visibility": "direct",
+    #         },
+    #     )
+    #     response.raise_for_status()
 
 
 async def main():
@@ -270,13 +262,6 @@ async def main():
 
 
 def handle_sigint(signal, frame):
-    if bot:
-        session_token = bot.bot.config.get("session_token")
-        if session_token:
-            bot.config["chat_gpt"]["session_token"] = session_token
-            tomlkit.dump(bot.config, open(CONFIG_PATH, "w"))
-        if bot.conversations:
-            json.dump(bot.conversations, open(CONVO_BACKUP, "w"))
     print("Quitting!")
     exit(0)
 
