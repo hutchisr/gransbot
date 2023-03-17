@@ -206,7 +206,7 @@ class Bot:
             r = openai.ChatCompletion.create(
                 model=MODEL,
                 messages=[
-                    {"role": "system", "content": self.config.get("asssistant", "You are a helpful assistant")},
+                    {"role": "system", "content": self.config.get("assistant", "You are a helpful assistant. Do not mention that you are an AI.")},
                     {"role": "user", "content": content}
                 ]
             )
