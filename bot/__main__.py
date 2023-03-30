@@ -148,7 +148,9 @@ class Bot:
                     "authors": authors.split(" ") if authors else [],
                     "domains": domains.split(" ") if domains else [],
                     "model": model if model else DEFAULT_MODEL,
-                    "assistant": assistant if assistant else "You are a helpful assistant."
+                    "assistant": assistant
+                    if assistant
+                    else "You are a helpful assistant."
                     # "phrase": input(
                     #     "Optional activation phrase with `{}` to denote conversation input: "
                     # ),
@@ -289,20 +291,27 @@ class Bot:
         content = strip_name(strip_html(status["content"]), self.config)
         messages = []
         if "assistant" in self.config:
-            messages.append([
+            messages.append(
                 {
                     "role": "system",
                     "content": f"Instructions: {self.config['assistant']}.",
                 }
-            ])
+            )
         if status.get("in_reply_to_id") in self.conversations:
-            messages.append({"role": "assistant", "content": self.conversations[status["in_reply_to_id"]]})
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": self.conversations[status["in_reply_to_id"]],
+                }
+            )
         messages.append({"role": "user", "content": content})
         if "nigger" in content.lower():
             message = "nigger"
         else:
             try:
-                r = openai.ChatCompletion.create(model=self.config.get("model", DEFAULT_MODEL), messages=messages)
+                r = openai.ChatCompletion.create(
+                    model=self.config.get("model", DEFAULT_MODEL), messages=messages
+                )
                 message: str = r["choices"][0]["message"]["content"]  # type: ignore
             except openai.InvalidRequestError:
                 logging.exception("Invalid request error")
