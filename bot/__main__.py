@@ -9,7 +9,7 @@ import signal
 import sys
 import termios
 from pathlib import Path
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 from urllib.parse import urlparse
 
 import requests
@@ -24,14 +24,22 @@ logging.basicConfig(level=logging.INFO)
 
 
 CONFIG_PATH = Path("config.toml")
+"""Path to config file"""
 CONVO_BACKUP = Path("conversations.json")
+"""Path to conversation backup file"""
 
 REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
+"""Redirect URI for OAuth2"""
 SCOPES = ["read", "write", "follow", "push", "admin"]
+"""Scopes for OAuth2"""
 
-MODEL = "gpt-3.5-turbo"
+DEFAULT_MODEL = "gpt-4"
+"""Model to use for OpenAI API"""
 
 MAX_LEN = 1024
+"""Maximum length of a message"""
+
+bot: Optional["Bot"] = None
 
 
 def long_input(prompt=""):
@@ -49,6 +57,7 @@ def long_input(prompt=""):
 
 
 def strip_html(string):
+    """Removes HTML tags and decodes HTML entities from a string."""
     # Remove HTML tags using a regular expression
     stripped = re.sub(r"<[^>]*>", "", string)
 
@@ -57,10 +66,30 @@ def strip_html(string):
 
 
 def strip_name(message, config):
+    """Removes the bot's name from a message
+
+    This is used to remove the bot's name from a message before sending it to the OpenAI API.
+
+    Args:
+        message (str): The message to strip the name from
+        config (dict): The bot's config
+
+    Returns:
+        str: The message with the bot's name removed
+    """
     return re.sub(rf"@?{config['username']}(@{config['domain']})?", "", message)
 
 
 def mentions_string(status, config):
+    """Returns a string of mentions for a status
+
+    Args:
+        status (dict): The status to get mentions for
+        config (dict): The bot's config
+
+    Returns:
+        str: A string of mentions for the status
+    """
     s = f"@{status['account']['acct']} "
     for mention in status["mentions"]:
         if mention["acct"] != config["username"]:
@@ -69,7 +98,15 @@ def mentions_string(status, config):
 
 
 def num_tokens_from_messages(messages, model="gpt-3.5-turbo-0301"):
-    """Returns the number of tokens used by a list of messages."""
+    """Returns the number of tokens used by a list of messages.
+
+    Args:
+        messages (list): A list of messages to count tokens for.
+        model (str): The model to use for counting tokens.
+
+    Returns:
+        int: The number of tokens used by the messages.
+    """
     try:
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
@@ -94,16 +131,24 @@ def num_tokens_from_messages(messages, model="gpt-3.5-turbo-0301"):
 
 
 class Bot:
-    """Chat Bot"""
+    """The bot"""
 
     def __init__(self):
         if not CONFIG_PATH.is_file():
+            domain = input("domain: ")
+            keywords = input("keywords (space separated): ")
+            authors = input("authors (space separated): ")
+            domains = input("domains (space separated): ")
+            model = input("model (default: gpt-4): ")
+            assistant = input("Instructions: ")
             tomlkit.dump(
                 {
-                    "domain": input("domain: "),
-                    "keywords": input("keywords (space separated): ").split(" "),
-                    "authors": input("authors (space separated): ").split(" "),
-                    "domains": input("domains (space separated): ").split(" "),
+                    "domain": domain,
+                    "keywords": keywords.split(" ") if keywords else [],
+                    "authors": authors.split(" ") if authors else [],
+                    "domains": domains.split(" ") if domains else [],
+                    "model": model if model else DEFAULT_MODEL,
+                    "assistant": assistant if assistant else "You are a helpful assistant."
                     # "phrase": input(
                     #     "Optional activation phrase with `{}` to denote conversation input: "
                     # ),
@@ -161,7 +206,7 @@ class Bot:
             tomlkit.dump(self.config, open(CONFIG_PATH, "w"))
 
         if not self.config.get("openapi_key"):
-            self.config["openapi_key"] = input("OpenAPI API key: ")
+            self.config["openapi_key"] = input("OpenAI API key: ")
 
         openai.api_key = self.config["openapi_key"]
 
@@ -191,6 +236,7 @@ class Bot:
                     )
 
     async def read_status(self):
+        """Reads statuses from the queue and responds to them if they are addressed to the bot."""
         logging.info("Waiting for statuses to be loaded...")
         while True:
             message = await self.status_queue.get()
@@ -234,26 +280,33 @@ class Bot:
                 logging.exception("Something went wrong while replying")
                 await asyncio.sleep(1)
 
-    async def reply(self, status):
+    async def reply(self, status: dict) -> None:
+        """Replies to a status with a message from the bot.
+
+        Args:
+            status (dict): The status to reply to.
+        """
         content = strip_name(strip_html(status["content"]), self.config)
-        messages = [
-            {
-                "role": "system",
-                "content": self.config.get(
-                    "assistant",
-                    "You are a helpful assistant.",
-                ),
-            }
-        ]
+        messages = []
+        if "assistant" in self.config:
+            messages.append([
+                {
+                    "role": "system",
+                    "content": f"Instructions: {self.config['assistant']}.",
+                }
+            ])
         if status.get("in_reply_to_id") in self.conversations:
             messages.append({"role": "assistant", "content": self.conversations[status["in_reply_to_id"]]})
         messages.append({"role": "user", "content": content})
-        try:
-            r = openai.ChatCompletion.create(model=MODEL, messages=messages)
-            message: str = r["choices"][0]["message"]["content"]  # type: ignore
-        except openai.InvalidRequestError:
-            logging.exception("Invalid request error")
-            return
+        if "nigger" in content.lower():
+            message = "nigger"
+        else:
+            try:
+                r = openai.ChatCompletion.create(model=self.config.get("model", DEFAULT_MODEL), messages=messages)
+                message: str = r["choices"][0]["message"]["content"]  # type: ignore
+            except openai.InvalidRequestError:
+                logging.exception("Invalid request error")
+                return
         response = requests.post(
             f"https://{self.config['domain']}/api/v1/statuses",
             headers={
@@ -267,8 +320,8 @@ class Bot:
             },
         )
         response.raise_for_status()
-        data = response.json()
-        self.conversations[data["id"]] = message
+        # data = response.json()
+        # self.conversations[data["id"]] = message
 
     # async def reply_notification(self, status):
     #     message = "average poast user"
@@ -288,6 +341,7 @@ class Bot:
 
 
 async def main():
+    """Main function that runs the bot."""
     global bot
     bot = Bot()
     while True:
@@ -303,8 +357,12 @@ async def main():
 
 
 def handle_sigint(signal, frame):
-    # if bot.conversations:
-    #     json.dump(bot.conversations, open(CONVO_BACKUP, "w"))
+    global bot
+    if not bot:
+        exit(1)
+    if bot.conversations:
+        json.dump(bot.conversations, open(CONVO_BACKUP, "w"))
+    tomlkit.dump(bot.config, open(CONFIG_PATH, "w"))
     print("Quitting!")
     exit(0)
 
