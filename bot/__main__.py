@@ -125,8 +125,9 @@ def num_tokens_from_messages(messages, model="gpt-3.5-turbo-0301"):
         return num_tokens
     else:
         raise NotImplementedError(
-            f"""num_tokens_from_messages() is not presently implemented for model {model}.
-  See https://github.com/openai/openai-python/blob/main/chatml.md for information on how messages are converted to tokens."""
+            f"num_tokens_from_messages() is not presently implemented for model {model}. "
+            "See https://github.com/openai/openai-python/blob/main/chatml.md "
+            "for information on how messages are converted to tokens."
         )
 
 
@@ -255,7 +256,7 @@ class Bot:
                     and (
                         status.get("in_reply_to_id") in self.conversations
                         or any(
-                            k in status["content"]
+                            k in status["content"].lower()
                             for k in self.config.get("keywords", [])
                         )
                         or status["account"]["acct"] in self.config.get("authors", [])
@@ -305,8 +306,6 @@ class Bot:
                 }
             )
         messages.append({"role": "user", "content": content})
-        if "nigger" in content.lower():
-            message = "nigger"
         else:
             try:
                 r = openai.ChatCompletion.create(
@@ -329,8 +328,8 @@ class Bot:
             },
         )
         response.raise_for_status()
-        # data = response.json()
-        # self.conversations[data["id"]] = message
+        data = response.json()
+        self.conversations[data["id"]] = message
 
     # async def reply_notification(self, status):
     #     message = "average poast user"
@@ -366,7 +365,6 @@ async def main():
 
 
 def handle_sigint(signal, frame):
-    global bot
     if not bot:
         exit(1)
     if bot.conversations:
