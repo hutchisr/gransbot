@@ -265,16 +265,16 @@ class Bot:
                     )
                 ):
                     await self.reply(status)
-                # elif (
-                #     event == "notification"
-                #     and status.get("emoji")
-                #     and (
-                #         status["account"]["acct"] in self.config.get("authors", [])
-                #         or urlparse(status["account"]["url"]).netloc
-                #         in self.config.get("domains", [])
-                #     )
-                # ):
-                #     await self.reply_notification(status)
+                elif (
+                    event == "notification"
+                    and status.get("emoji")
+                    and (
+                        status["account"]["acct"] in self.config.get("authors", [])
+                        or urlparse(status["account"]["url"]).netloc
+                        in self.config.get("domains", [])
+                    )
+                ):
+                    await self.reply_notification(status)
                 else:
                     continue
                 logging.info("Finished replying, wait 10 seconds...")
@@ -305,16 +305,27 @@ class Bot:
                     "content": self.conversations[status["in_reply_to_id"]],
                 }
             )
-        messages.append({"role": "user", "content": content})
+        if any(
+            word in content.lower() for word in self.config.get("blocked_words", [])
+        ):
+            messages.append(
+                {
+                    "role": "user",
+                    "content": re.sub(
+                        "|".join(self.config.get("blocked_words", [])), "[PLACEHOLDER]", content
+                    ),
+                }
+            )
         else:
-            try:
-                r = openai.ChatCompletion.create(
-                    model=self.config.get("model", DEFAULT_MODEL), messages=messages
-                )
-                message: str = r["choices"][0]["message"]["content"]  # type: ignore
-            except openai.InvalidRequestError:
-                logging.exception("Invalid request error")
-                return
+            messages.append({"role": "user", "content": content})
+        try:
+            r = openai.ChatCompletion.create(
+                model=self.config.get("model", DEFAULT_MODEL), messages=messages
+            )
+            message: str = r["choices"][0]["message"]["content"]  # type: ignore
+        except openai.InvalidRequestError:
+            logging.exception("Invalid request error")
+            return
         response = requests.post(
             f"https://{self.config['domain']}/api/v1/statuses",
             headers={
@@ -331,21 +342,42 @@ class Bot:
         data = response.json()
         self.conversations[data["id"]] = message
 
-    # async def reply_notification(self, status):
-    #     message = "average poast user"
-    #     response = requests.post(
-    #         f"https://{self.config['domain']}/api/v1/statuses",
-    #         headers={
-    #             "Authorization": f"Bearer {self.config['access_token']}",
-    #             "Idempotency-Key": f"{hashlib.sha1(message.encode())}",
-    #         },
-    #         data={
-    #             "status": f"@{status['account']['acct']} " + message.strip('"'),
-    #             "in_reply_to_account_id": status["account"]["id"],
-    #             "visibility": "direct",
-    #         },
-    #     )
-    #     response.raise_for_status()
+    async def reply_notification(self, status):
+        messages = []
+        if "assistant" in self.config:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": f"Instructions: {self.config['assistant']}.",
+                }
+            )
+        messages.append(
+            {
+                "role": "user",
+                "content": status["emoji"],
+            }
+        )
+        try:
+            r = openai.ChatCompletion.create(
+                model=self.config.get("model", DEFAULT_MODEL), messages=messages
+            )
+            message: str = r["choices"][0]["message"]["content"]  # type: ignore
+        except openai.InvalidRequestError:
+            logging.exception("Invalid request error")
+            return
+        response = requests.post(
+            f"https://{self.config['domain']}/api/v1/statuses",
+            headers={
+                "Authorization": f"Bearer {self.config['access_token']}",
+                "Idempotency-Key": f"{hashlib.sha1(message.encode())}",
+            },
+            data={
+                "status": f"@{status['account']['acct']} " + message.strip('"'),
+                "in_reply_to_account_id": status["account"]["id"],
+                "visibility": "unlisted",
+            },
+        )
+        response.raise_for_status()
 
 
 async def main():
